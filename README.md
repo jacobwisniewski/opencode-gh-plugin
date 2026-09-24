@@ -23,7 +23,13 @@ session sidebar.
 
 ## Install
 
-Clone the plugin into OpenCode's global plugin directory:
+Install the fork directly from GitHub:
+
+```sh
+opencode2 plugin add github:jacobwisniewski/opencode-gh-plugin
+```
+
+Alternatively, clone it into OpenCode's global plugin directory:
 
 ```sh
 git clone https://github.com/jacobwisniewski/opencode-gh-plugin.git \
