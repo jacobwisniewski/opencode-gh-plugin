@@ -1,16 +1,35 @@
 {
   "name": "opencode-gh-plugin",
+  "version": "2.0.0",
+  "description": "OpenCode V2 sidebar plugin for GitHub pull requests and CI checks",
   "private": true,
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/jacobwisniewski/opencode-gh-plugin.git"
+  },
+  "exports": {
+    ".": "./src/index.ts",
+    "./tui": "./sidebar-context.tsx"
+  },
   "scripts": {
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "check": "npm run lint && npm run typecheck"
   },
+  "dependencies": {
+    "@opencode/plugin": "2.0.16"
+  },
+  "peerDependencies": {
+    "@opentui/core": ">=0.5.8",
+    "@opentui/solid": ">=0.5.8",
+    "solid-js": ">=1.9.0"
+  },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
-    "@opencode-ai/plugin": "1.4.3",
-    "@opentui/core": "^0.5.3",
-    "@opentui/solid": "^0.5.3",
+    "@opencode/theme": "^2.0.16",
+    "@opentui/core": "0.5.12",
+    "@opentui/solid": "0.5.12",
     "@types/node": "^25.6.0",
     "@typescript-eslint/eslint-plugin": "^8.58.1",
     "@typescript-eslint/parser": "^8.58.1",

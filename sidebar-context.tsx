@@ -1,11 +1,6 @@
 /** @jsxImportSource @opentui/solid */
 import { createEffect, createMemo, createSignal, For, on, onCleanup } from "solid-js"
-import type {
-  TuiPlugin,
-  TuiPluginApi,
-  TuiPluginModule,
-  TuiSlotPlugin,
-} from "@opencode-ai/plugin/tui"
+import { Plugin } from "@opencode/plugin/tui"
 import { execFile } from "node:child_process"
 const BOGUS = 1_000_000_000_000
 const SPINNER = ["·", "•"]
@@ -25,6 +20,8 @@ type CiOverallState = "fail" | "pending" | "pass" | null
 type CiCheck = { name: string; state: string; bucket?: string; workflow: string; link: string; startedAt: string; completedAt: string }
 type CiData = { checks: CiCheck[]; ts: number } | null
 type RepoData = { dir: string; branch?: string }
+type PluginContext = Plugin.Context
+type Theme = PluginContext["theme"]
 
 const PENDING = new Set(["PENDING", "IN_PROGRESS", "QUEUED", "REQUESTED", "WAITING", "EXPECTED", "STALE"])
 const FAIL = new Set(["FAILURE", "ERROR", "TIMED_OUT", "ACTION_REQUIRED", "CANCELLED"])
@@ -53,7 +50,9 @@ const gh = (args: string[], dir: string) => cmd("gh", args, dir)
 const git = (args: string[], dir: string) => cmd("git", args, dir)
 
 const openUrl = (url: string) => {
-  execFile("open", [url], () => {})
+  const command = process.platform === "darwin" ? "open" : process.platform === "win32" ? "cmd" : "xdg-open"
+  const args = process.platform === "win32" ? ["/c", "start", "", url] : [url]
+  execFile(command, args, () => {})
 }
 
 const fmtSec = (sec: number): string => {
@@ -99,22 +98,15 @@ const ciReactionOverall = (checks: CiCheck[] | undefined): CiOverallState => {
   return "pass"
 }
 
-const parse = <T,>(res: T | { data?: T }) => {
-  if (res && typeof res === "object" && "data" in res) return res.data
-  return res
-}
-
 const branch = async (dir: string) => {
   const out = await git(["rev-parse", "--abbrev-ref", "HEAD"], dir)
   if (!out || out === "HEAD") return undefined
   return out
 }
 
-const sessionDir = async (api: TuiPluginApi, sid: string) => {
-  const res = await api.client.session.get({ sessionID: sid }).catch(() => null)
-  const data = res ? parse(res as { data?: { directory?: string } }) : null
-  if (!data || typeof data !== "object") return null
-  return typeof (data as { directory?: string }).directory === "string" ? (data as { directory?: string }).directory : null
+const sessionDir = async (context: PluginContext, sid: string) => {
+  const session = await context.client.session.get({ sessionID: sid }).catch(() => null)
+  return session?.location.directory ?? null
 }
 
 const parsePr = (out: string | null): PrData => {
@@ -242,18 +234,18 @@ const ms = (item: CiCheck & { queued: boolean }) => {
   return e - s
 }
 
-const CheckRow = (props: { item: CiCheck; theme: TuiPluginApi["theme"]["current"]; spin: number; labelMax: number }) => {
+const CheckRow = (props: { item: CiCheck; theme: Theme; spin: number; labelMax: number }) => {
   const pending = () => isPending(props.item.state)
   const icon = () => isFail(props.item.state) ? "✗" : pending() ? SPINNER[props.spin] : isSkip(props.item.state) ? SKIP_ICON : "✓"
-  const color = () => isFail(props.item.state) ? props.theme.error : pending() ? props.theme.warning : isSkip(props.item.state) ? props.theme.textMuted : props.theme.success
-  const durColor = () => pending() ? props.theme.warning : props.theme.textMuted
+  const color = () => isFail(props.item.state) ? props.theme.text.feedback.error.base : pending() ? props.theme.text.feedback.warning.base : isSkip(props.item.state) ? props.theme.text.muted : props.theme.text.feedback.success.base
+  const durColor = () => pending() ? props.theme.text.feedback.warning.base : props.theme.text.muted
   const dur = () => pending() ? elapsed(props.item.startedAt) : isSkip(props.item.state) ? "" : spanDuration([props.item])
   // OpenTUI quirk: the first character of a <span> inside <text> inherits the
   // outer fg. We prepend a leading space inside each colour-critical span so
   // the "bad first char" is invisible whitespace.
   return (
-    <box flexDirection="row" width="100%" justifyContent="space-between" height={1} backgroundColor={props.theme.backgroundPanel}>
-      <text fg={props.theme.textMuted} overflow="hidden" flexShrink={1} wrapMode="none">{middle(checkLabel(props.item), props.labelMax)}</text>
+    <box flexDirection="row" width="100%" justifyContent="space-between" height={1} backgroundColor={props.theme.background.raised.base}>
+      <text fg={props.theme.text.muted} overflow="hidden" flexShrink={1} wrapMode="none">{middle(checkLabel(props.item), props.labelMax)}</text>
       <text flexShrink={0} wrapMode="none">
         <span style={{ fg: durColor() }}>{dur() ? ` ${dur()}` : ""}</span>
         <span style={{ fg: color() }}>{` ${icon()}`}</span>
@@ -263,7 +255,7 @@ const CheckRow = (props: { item: CiCheck; theme: TuiPluginApi["theme"]["current"
 }
 
 const PlaceholderRow = (props: {
-  theme: TuiPluginApi["theme"]["current"]
+  theme: Theme
   left: string
   right?: string
   panel?: boolean
@@ -273,16 +265,17 @@ const PlaceholderRow = (props: {
     width="100%"
     justifyContent="space-between"
     height={1}
-    backgroundColor={props.panel ? props.theme.backgroundPanel : undefined}
+    backgroundColor={props.panel ? props.theme.background.raised.base : undefined}
   >
-    <text fg={props.theme.textMuted} wrapMode="none">{props.left}</text>
-    {props.right ? <text fg={props.theme.textMuted} wrapMode="none">{props.right}</text> : null}
+    <text fg={props.theme.text.muted} wrapMode="none">{props.left}</text>
+    {props.right ? <text fg={props.theme.text.muted} wrapMode="none">{props.right}</text> : null}
   </box>
 )
 
-const autoReactKey = (sid: string) => `ci_auto_react:${sid}`
-
-const View = (props: { api: TuiPluginApi; session_id: string }) => {
+const View = (props: { context: PluginContext; sessionID: string }) => {
+  const [settings, updateSettings] = props.context.storage.store("settings", {
+    initial: { autoReact: {} as Record<string, boolean> },
+  })
   const [repo, setRepo] = createSignal<RepoData | null>(null)
   const [pr, setPr] = createSignal<PrData>(null)
   const [ci, setCi] = createSignal<CiData>(null)
@@ -295,12 +288,14 @@ const View = (props: { api: TuiPluginApi; session_id: string }) => {
   const [collapsed, setCollapsed] = createSignal(false)
   const toggleCollapse = () => setCollapsed(!collapsed())
 
-  const theme = createMemo(() => props.api.theme.current)
+  const theme = createMemo(() => props.context.theme)
   const toggleAutoReact = () => {
     const next = !autoReact()
     setAutoReact(next)
     if (!next) setAutofixHover(false)
-    props.api.kv.set(autoReactKey(props.session_id), next)
+    void updateSettings((draft) => {
+      draft.autoReact[props.sessionID] = next
+    })
   }
   const location = createMemo(() => {
     const dir = repo()?.dir || ""
@@ -373,20 +368,20 @@ const View = (props: { api: TuiPluginApi; session_id: string }) => {
     const items: Array<{
       label: string
       icon: string
-      color: TuiPluginApi["theme"]["current"]["text"]
-      labelColor?: TuiPluginApi["theme"]["current"]["text"]
+      color: Theme["text"]["base"]
+      labelColor?: Theme["text"]["base"]
     }> = []
-    if (state().skipN) items.push({ label: String(state().skipN), icon: SKIP_ICON, color: theme().text })
+    if (state().skipN) items.push({ label: String(state().skipN), icon: SKIP_ICON, color: theme().text.base })
     if (state().failN) {
       items.push({
         label: String(state().failN),
         icon: "✗",
-        color: theme().error,
-        labelColor: theme().text,
+        color: theme().text.feedback.error.base,
+        labelColor: theme().text.base,
       })
     }
-    if (state().pendN) items.push({ label: String(state().pendN), icon: SPINNER[spin()], color: theme().warning })
-    if (state().passN) items.push({ label: String(state().passN), icon: "✓", color: theme().success })
+    if (state().pendN) items.push({ label: String(state().pendN), icon: SPINNER[spin()], color: theme().text.feedback.warning.base })
+    if (state().passN) items.push({ label: String(state().passN), icon: "✓", color: theme().text.feedback.success.base })
     return items
   })
   const prLinkIcon = () => {
@@ -400,13 +395,13 @@ const View = (props: { api: TuiPluginApi; session_id: string }) => {
   }
   const prLinkColor = () => {
     const t = theme()
-    if (summaryHover()) return t.text
+    if (summaryHover()) return t.text.base
     if (pr()?.merged) return MERGED_PURPLE
     const overall = ciOverall(ci()?.checks)
-    if (overall === "fail") return t.error
-    if (overall === "pending") return t.warning
+    if (overall === "fail") return t.text.feedback.error.base
+    if (overall === "pending") return t.text.feedback.warning.base
     if (overall === "pass") return SUCCESS_MUTED
-    return t.textMuted
+    return t.text.muted
   }
 
   let spinTimer: ReturnType<typeof setInterval> | null = null
@@ -456,7 +451,7 @@ const View = (props: { api: TuiPluginApi; session_id: string }) => {
   }
 
   const reactToFailure = async (sid: string, dir: string, nextPr: PrData, nextBranch: string | undefined, next: NonNullable<CiData>) => {
-    props.api.ui.toast({
+    props.context.ui.toast.show({
       variant: "error",
       title: "GitHub CI failed",
       message: autoReact() ? "Notifying the agent." : "CI checks entered a failing state.",
@@ -465,13 +460,12 @@ const View = (props: { api: TuiPluginApi; session_id: string }) => {
     const failingChecks = next.checks.filter(isReactionFail)
     const runIds = extractRunIds(failingChecks)
     const logs = runIds.length > 0 ? await fetchFailedLogs(dir, runIds) : null
-    const res = await props.api.client.session.promptAsync({
+    const res = await props.context.client.session.prompt({
       sessionID: sid,
-      directory: dir,
-      parts: [{ type: "text", text: failurePrompt(nextPr, nextBranch, next.checks, logs) }],
-    }, { throwOnError: true }).catch(() => null)
+      text: failurePrompt(nextPr, nextBranch, next.checks, logs),
+    }).catch(() => null)
     if (!res) {
-      props.api.ui.toast({
+      props.context.ui.toast.show({
         variant: "error",
         title: "GitHub CI failed",
         message: "Failed to notify the agent.",
@@ -518,7 +512,6 @@ const View = (props: { api: TuiPluginApi; session_id: string }) => {
     ])
     if (run !== token) return
     setPr(nextPr)
-    props.api.kv.set(`shared:pr:${sid}`, nextPr)
     if (next || Date.now() < burst) applyCi(sid, dir, next, nextPr, currentBranch)
     schedule(sid, dir)
   }
@@ -529,7 +522,7 @@ const View = (props: { api: TuiPluginApi; session_id: string }) => {
     loadInFlight = true
     stopCi()
     try {
-      const dir = await sessionDir(props.api, sid)
+      const dir = await sessionDir(props.context, sid)
       if (run !== token) return
       if (!dir) {
         setRepo(null)
@@ -552,7 +545,6 @@ const View = (props: { api: TuiPluginApi; session_id: string }) => {
       if (run !== token) return
       setRepo({ dir, branch: head })
       setPr(nextPr)
-      props.api.kv.set(`shared:pr:${sid}`, nextPr)
       applyCi(sid, dir, checks, nextPr, head)
       setLoading(false)
       schedule(sid, dir)
@@ -561,24 +553,24 @@ const View = (props: { api: TuiPluginApi; session_id: string }) => {
     }
   }
 
-  createEffect(on(() => props.session_id, (sid) => {
+  createEffect(on(() => props.sessionID, (sid) => {
     setLoading(true)
     setRepo(null)
     setPr(null)
     setCi(null)
     seenReactionState = false
     lastReactionState = null
-    setAutoReact(props.api.kv.get(autoReactKey(sid), true))
+    setAutoReact(settings.autoReact[sid] ?? true)
     void load(sid, true)
 
-    const offIdle = props.api.event.on("session.idle", (evt) => {
-      if ((evt as { properties?: { sessionID?: string } }).properties?.sessionID !== sid) return
+    const offIdle = props.context.data.on("session.idle", (evt) => {
+      if (evt.data.sessionID !== sid) return
       if (Date.now() - lastIdleLoad < IDLE_REFRESH_MS) return
       lastIdleLoad = Date.now()
       void load(sid, true)
     })
 
-    const offBranch = props.api.event.on("vcs.branch.updated", () => {
+    const offBranch = props.context.data.on("vcs.branch.updated", () => {
       if (!repo()?.dir) return
       void load(sid, true)
     })
@@ -611,27 +603,27 @@ const View = (props: { api: TuiPluginApi; session_id: string }) => {
   return (
     <box>
       {showGithub() ? (
-        <box flexDirection="column" backgroundColor={theme().backgroundPanel}>
-          <box flexDirection="row" width="100%" justifyContent="space-between" height={1} backgroundColor={theme().backgroundPanel}>
+        <box flexDirection="column" backgroundColor={theme().background.raised.base}>
+          <box flexDirection="row" width="100%" justifyContent="space-between" height={1} backgroundColor={theme().background.raised.base}>
             <box flexDirection="row" flexShrink={1}>
               <box flexDirection="row" flexShrink={0} onMouseOver={() => setCollapseHover(true)} onMouseOut={() => setCollapseHover(false)} onMouseUp={toggleCollapse}>
                 {/* OpenTUI quirk: first char of a <span> in <text> inherits outer fg.
                     Set outer fg to the colour we want for the first character (▼/▶). */}
-                <text flexShrink={0} wrapMode="none" fg={collapseHover() ? theme().text : theme().textMuted}>
+                <text flexShrink={0} wrapMode="none" fg={collapseHover() ? theme().text.base : theme().text.muted}>
                   {collapsed() ? "▶" : "▼"}
-                  <span style={{ fg: theme().text }}>{" GitHub "}</span>
+                  <span style={{ fg: theme().text.base }}>{" GitHub "}</span>
                 </text>
               </box>
               <box flexDirection="row" flexShrink={0} onMouseOver={() => setAutofixHover(true)} onMouseOut={() => setAutofixHover(false)} onMouseUp={toggleAutoReact}>
-                <text flexShrink={0} wrapMode="none" fg={autoReact() ? theme().success : theme().textMuted}>
+                <text flexShrink={0} wrapMode="none" fg={autoReact() ? theme().text.feedback.success.base : theme().text.muted}>
                   {autoReact() ? "•" : "·"}
-                  <span style={{ fg: autoReact() ? theme().text : autofixHover() ? theme().text : theme().textMuted }}>{" Watch"}</span>
+                  <span style={{ fg: autoReact() ? theme().text.base : autofixHover() ? theme().text.base : theme().text.muted }}>{" Watch"}</span>
                 </text>
               </box>
             </box>
             {pr() ? (
               <box flexDirection="row" flexShrink={0} onMouseOver={() => setSummaryHover(true)} onMouseOut={() => setSummaryHover(false)} onMouseUp={() => openUrl(pr()!.url)}>
-                <text wrapMode="none" flexShrink={0} fg={summaryHover() ? theme().text : pr()?.merged ? MERGED_PURPLE : theme().textMuted}>{`#${pr()!.num}`}</text>
+                <text wrapMode="none" flexShrink={0} fg={summaryHover() ? theme().text.base : pr()?.merged ? MERGED_PURPLE : theme().text.muted}>{`#${pr()!.num}`}</text>
                 <text wrapMode="none" flexShrink={0} fg={prLinkColor()}>{` ${prLinkIcon()}`}</text>
               </box>
             ) : (
@@ -643,14 +635,14 @@ const View = (props: { api: TuiPluginApi; session_id: string }) => {
               {(row) => row.kind === "check" ? (
                 <CheckRow item={row.item} theme={theme()} spin={spin()} labelMax={state().labelMax} />
               ) : (
-                <box flexDirection="row" width="100%" justifyContent="flex-end" height={1} backgroundColor={theme().backgroundPanel}>
+                <box flexDirection="row" width="100%" justifyContent="flex-end" height={1} backgroundColor={theme().background.raised.base}>
                   <For each={footerItems()}>
                     {(item, index) => (
                       // First char of each <span> inherits outer fg. Set outer fg
                       // to the label colour (first visible chars) and prepend a
                       // space inside the icon span so the icon glyph survives.
-                      <text wrapMode="none" flexShrink={0} fg={item.labelColor ?? theme().textMuted}>
-                        {index() > 0 ? <span style={{ fg: theme().textMuted }}>{" · "}</span> : null}
+                      <text wrapMode="none" flexShrink={0} fg={item.labelColor ?? theme().text.muted}>
+                        {index() > 0 ? <span style={{ fg: theme().text.muted }}>{" · "}</span> : null}
                         {item.label}
                         <span style={{ fg: item.color }}>{` ${item.icon}`}</span>
                       </text>
@@ -670,42 +662,30 @@ const View = (props: { api: TuiPluginApi; session_id: string }) => {
         </box>
       ) : (
         <box flexDirection="column" marginTop={1}>
-          <text fg={theme().textMuted} overflow="hidden" wrapMode="none">{location().path}</text>
-          {location().branch ? <text fg={theme().text} wrapMode="none">{location().branch}</text> : null}
+          <text fg={theme().text.muted} overflow="hidden" wrapMode="none">{location().path}</text>
+          {location().branch ? <text fg={theme().text.base} wrapMode="none">{location().branch}</text> : null}
         </box>
       )}
       <box marginTop={1}>
-        <text fg={theme().success}>
+        <text fg={theme().text.feedback.success.base}>
           {"•"}
-          <span style={{ fg: theme().textMuted }}>{" "}<b>Open</b></span>
-          <span style={{ fg: theme().text }}><b>Code</b></span>
-          <span style={{ fg: theme().textMuted }}>{" " + props.api.app.version}</span>
+          <span style={{ fg: theme().text.muted }}>{" "}<b>Open</b></span>
+          <span style={{ fg: theme().text.base }}><b>Code</b></span>
+          <span style={{ fg: theme().text.muted }}>{" " + props.context.app.version}</span>
         </text>
       </box>
     </box>
   )
 }
 
-// ── Footer slot ──
-
-const footer = (api: TuiPluginApi): TuiSlotPlugin => ({
-  order: 50,
-  slots: {
-    sidebar_footer(_ctx, value) {
-      return <View api={api} session_id={value.session_id} />
-    },
-  },
-})
-
 // ── Init ──
 
-const tui: TuiPlugin = async (api) => {
-  api.slots.register(footer(api))
-}
-
-const plugin: TuiPluginModule & { id: string } = {
-  id: "custom-sidebar-context",
-  tui,
-}
-
-export default plugin
+export default Plugin.define({
+  id: "opencode-gh-plugin.tui",
+  setup(context) {
+    return context.ui.slot({
+      append: "sidebar.content",
+      render: ({ sessionID }) => <View context={context} sessionID={sessionID} />,
+    })
+  },
+})

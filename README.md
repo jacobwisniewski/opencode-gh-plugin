@@ -1,37 +1,60 @@
 # opencode-gh-plugin
 
-An [OpenCode](https://opencode.ai) TUI plugin that adds GitHub context to the session sidebar footer.
+An OpenCode V2 TUI plugin that adds GitHub pull-request and CI context to the
+session sidebar.
 
-- **Session-scoped repo context** — resolves the repo from the viewed `session_id`, not the currently focused workspace
-- **GitHub CI summary** — compact header with overall status plus pass/pending/fail/skip counts
-- **Expandable checks list** — opens upward, keeps the header pinned to the bottom, and reserves the last row for `+N more`
-- **PR link** — clickable PR number in the header, with check rows and overflow link-outs
-- **Repo path and branch** — current session directory plus git branch at a glance
-- **Middle-ellipsis labels** — long workflow/check names keep both the prefix and suffix visible
-- **Live polling** — refreshes on session idle and branch changes while checks are pending
+## Features
 
-![demo](./demo.gif)
+- Resolves repository context from the viewed session rather than the shell's
+  current directory.
+- Shows the current path and branch.
+- Shows a clickable pull-request link.
+- Summarizes GitHub Actions checks and expands the most relevant checks.
+- Refreshes after session activity, branch changes, and Git HEAD changes.
+- Can notify the active agent when CI enters a failing state.
+- Opens links on macOS, Linux, and Windows.
+
+## Requirements
+
+- OpenCode V2 with CLI plugin support
+- `gh`, authenticated for the repository
+- `git`
+- The viewed session directory must exist locally
 
 ## Install
 
-Point your OpenCode TUI plugin config at `sidebar-context.tsx`:
+Clone the plugin into OpenCode's global plugin directory:
+
+```sh
+git clone https://github.com/jacobwisniewski/opencode-gh-plugin.git \
+  ~/.config/opencode/plugins/opencode-gh-plugin
+```
+
+OpenCode discovers package directories under `~/.config/opencode/plugins/`
+automatically. Alternatively, add the local package explicitly to
+`~/.config/opencode/cli.json`:
 
 ```json
 {
-  "plugin": [
-    "/absolute/path/to/opencode-gh-plugin/sidebar-context.tsx"
-  ]
+  "$schema": "https://opencode.ai/v2/cli.json",
+  "plugins": ["./plugins/opencode-gh-plugin"]
 }
 ```
 
-Requirements:
+Restart OpenCode after installation.
 
-- `gh` installed and authenticated
-- `git` available in `PATH`
-- the viewed session directory must still exist locally
+## Development
 
-Notes:
+```sh
+npm install
+npm run check
+```
 
-- The footer no longer shows session spend.
-- PR and CI state are not stored in global KV anymore, so they do not leak across sessions.
-- If `gh pr view` returns nothing for the session directory, the PR link is hidden.
+The package exports a no-op server entrypoint and a `./tui` entrypoint, allowing
+OpenCode V2 to load the sidebar automatically whether the package is discovered
+locally or configured as a plugin.
+
+## Upstream
+
+This is a V2 port of
+[`stefanmatar/opencode-gh-plugin`](https://github.com/stefanmatar/opencode-gh-plugin).
